@@ -1,36 +1,38 @@
-# 🥗 AI Nutrition Analyzer
+# 🥗 AI Nutrition & Video Analyzer
 
-A Streamlit web app that analyzes a photo of your meal using Google's Gemini AI and returns a detailed nutritional breakdown — items detected, estimated macros, allergens, and health notes.
+A Streamlit web app that uses Google's Gemini AI to analyze meal photos (returning a detailed nutritional breakdown) and videos (returning a detailed description). A companion FastAPI backend (`main.py`) provides the same analysis as an API and persists results to MongoDB.
 
 ## Features
 
-- 📷 Upload a food photo (JPG, JPEG, PNG)
-- 🔍 Automatic blur detection — rejects unclear images before analysis
-- 🤖 AI-powered nutritional breakdown using Gemini
+- 📷 Upload a food photo (JPG, JPEG, PNG) for nutritional analysis
+- 🎥 Upload a video (MP4, MOV, AVI, WEBM) for AI-generated description
+- 🤖 AI-powered analysis using Gemini (`gemini-2.5-flash`)
 - 📊 Per-item and total macros (calories, protein, carbs, fat, fiber)
-- ⚠️ Allergen detection
 - 📝 General health notes (not personalized medical advice)
+- 🗄️ Optional FastAPI + MongoDB backend for saving analysis history, listing past results, and stats
 
 ## Tech Stack
 
 - [Streamlit](https://streamlit.io/) — frontend/UI
+- [FastAPI](https://fastapi.tiangolo.com/) — backend API (`main.py`)
 - [LangChain](https://www.langchain.com/) — prompt orchestration
 - [Google Gemini](https://ai.google.dev/) — vision/LLM model
-- [OpenCV](https://opencv.org/) — blur detection
+- [MongoDB](https://www.mongodb.com/) (via `pymongo`) — storing analysis history (backend only)
 
 ## Project Structure
 
 ```
 nutrition-analyzer/
-├── app.py                  # Main Streamlit app
+├── app.py                  # Streamlit frontend (meal photo + video analysis)
+├── main.py                 # FastAPI backend (API + MongoDB persistence)
 ├── requirements.txt        # Python dependencies
-├── .env                     # Local secrets (not committed)
+├── .env                    # Local secrets (not committed)
 ├── .gitignore
 ├── README.md
 ├── assets/
 │   └── logo_salad.png
 └── .streamlit/
-    └── config.toml          # Optional theme settings
+    └── config.toml         # Optional theme settings
 ```
 
 ## Setup & Installation
@@ -57,21 +59,30 @@ myvenv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 4. Add your Gemini API key
+### 4. Add your environment variables
 
 Create a `.env` file in the project root:
 ```
 GEMINI_API_KEY=your_actual_api_key_here
+
+# Only needed if running main.py (FastAPI backend)
+MONGO_URL=your_mongodb_connection_string
+DB_NAME=nutrition_analyzer
 ```
 
-Get a key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+Get a Gemini key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 
-### 5. Run the app
+### 5. Run the Streamlit app
 ```bash
 streamlit run app.py
 ```
-
 The app will open at `http://localhost:8501`.
+
+### 6. (Optional) Run the FastAPI backend
+```bash
+uvicorn main:app --reload
+```
+The API will be available at `http://localhost:8000` (interactive docs at `/docs`).
 
 ## Deploying on Streamlit Community Cloud
 
@@ -84,18 +95,41 @@ The app will open at `http://localhost:8501`.
    ```
 5. Deploy 🎉
 
+## API Endpoints (`main.py`)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/` | Health check |
+| POST | `/analyze` | Upload a meal photo for nutritional analysis |
+| GET | `/analyses` | List all saved meal analyses |
+| GET | `/analyses/{id}` | Get one meal analysis by ID |
+| PUT | `/analyses/{id}` | Update notes/status of an analysis |
+| DELETE | `/analyses/{id}` | Delete a meal analysis |
+| POST | `/analyze-video` | Upload a video for AI description |
+| GET | `/video-analyses` | List all saved video analyses |
+| GET | `/video-analyses/{id}` | Get one video analysis by ID |
+| DELETE | `/video-analyses/{id}` | Delete a video analysis |
+| GET | `/stats` | Get aggregate stats on saved meal analyses |
+
 ## How It Works
 
+**Meal photo analysis:**
 1. User uploads a meal photo.
-2. The app checks file type and size.
-3. A blur-detection step (variance of Laplacian) rejects unclear images.
-4. The image is base64-encoded and sent to Gemini with a structured prompt.
-5. Gemini returns a JSON breakdown, parsed automatically via `JsonOutputParser`.
-6. Results are displayed in a clean, card-based UI.
+2. The app checks file size (max 10MB).
+3. The image is base64-encoded and sent to Gemini with a structured prompt.
+4. Gemini returns a JSON breakdown, parsed via `JsonOutputParser`.
+5. Results are displayed as per-item and total macro cards.
+
+**Video analysis:**
+1. User uploads a video and optionally customizes the analysis question.
+2. The app checks file size (max 50MB).
+3. The video is base64-encoded and sent to Gemini as inline media.
+4. Gemini returns a free-text description, parsed via `StrOutputParser`.
+5. The result is displayed as plain text.
 
 ## Disclaimer
 
-This app provides general nutritional estimates generated by AI and is **not a substitute for professional medical or dietary advice**. Estimates may be inaccurate; consult a registered dietitian or doctor for personalized guidance.
+This app provides general nutritional estimates and video descriptions generated by AI and is **not a substitute for professional medical or dietary advice**. Estimates may be inaccurate; consult a registered dietitian or doctor for personalized guidance.
 
 ## License
 
