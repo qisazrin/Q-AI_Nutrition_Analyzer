@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -12,7 +11,7 @@ import uvicorn
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
 # ───────────── LOAD ENV ─────────────
 load_dotenv()
@@ -22,21 +21,19 @@ app = FastAPI(title="AI Nutrition Analyzer API", version="1.0")
 
 @app.get("/")
 async def root():
-    # Redirect visitors of the backend root to the frontend (update URL once deployed)
-    return RedirectResponse(url="https://your-frontend-url.onrender.com")
-
+    return {"message": "AI Nutrition Analyzer API is running"}
 
 # ───────────── DATABASE ─────────────
 client = MongoClient(os.getenv("MONGO_URL"))
 db = client[os.getenv("DB_NAME")]
 analyses_collection = db["analyses"]
+video_analyses_collection = db["video_analyses"]
 
 # ───────────── GEMINI LLM ─────────────
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     api_key=os.getenv("GEMINI_API_KEY")
 )
-
 
 # ───────────── MODELS ─────────────
 class AnalysisUpdate(BaseModel):
@@ -64,8 +61,24 @@ def get_next_analysis_id():
             return candidate
 
 
+def get_next_video_analysis_id():
+    existing_ids = set(
+        v["id"] for v in video_analyses_collection.find({}, {"id": 1})
+    )
+    if not existing_ids:
+        return 1
+    max_id = max(existing_ids)
+    for candidate in range(1, max_id + 2):
+        if candidate not in existing_ids:
+            return candidate
+
+
 def encode_image(image_content: bytes) -> str:
     return base64.b64encode(image_content).decode()
+
+
+def encode_video(video_content: bytes) -> str:
+    return base64.b64encode(video_content).decode()
 
 
 def analyze_food_image(image_bytes: bytes, content_type: str) -> dict:
@@ -93,6 +106,25 @@ def analyze_food_image(image_bytes: bytes, content_type: str) -> dict:
 
     chain = prompt | llm | JsonOutputParser()
     return chain.invoke({})
+
+
+def analyze_video_file(video_bytes: bytes, mime_type: str, analysis_request: str) -> str:
+    encoded_video = encode_video(video_bytes)
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are an expert video analyst. Analyze the video carefully and provide detailed descriptions."),
+        ("human", [
+            {"type": "text", "text": "{analysis_request}"},
+            {"type": "media", "data": "{video_data}", "mime_type": "{mime_type}"}
+        ])
+    ])
+
+    chain = prompt | llm | StrOutputParser()
+    return chain.invoke({
+        "analysis_request": analysis_request,
+        "video_data": encoded_video,
+        "mime_type": mime_type
+    })
 
 
 # ───────────── ANALYZE MEAL ─────────────
@@ -180,6 +212,62 @@ async def get_stats():
         "total_analyses": total,
         "completed": completed
     }
+
+
+# ───────────── ANALYZE VIDEO ─────────────
+@app.post("/analyze-video")
+async def analyze_video(file: UploadFile = File(...), analysis_request: str = "Describe what's happening in this video."):
+    mime_type = file.content_type
+    video_bytes = await file.read()
+
+    if len(video_bytes) > 50_000_000:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 50MB")
+
+    try:
+        result_text = analyze_video_file(video_bytes, mime_type, analysis_request)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video analysis failed: {str(e)}")
+
+    new_video_analysis = {
+        "id": get_next_video_analysis_id(),
+        "filename": file.filename,
+        "analysis_request": analysis_request,
+        "result": result_text,
+        "status": "completed",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    video_analyses_collection.insert_one(new_video_analysis)
+    new_video_analysis.pop("_id", None)
+    return new_video_analysis
+
+
+# ───────────── GET ALL VIDEO ANALYSES ─────────────
+@app.get("/video-analyses")
+async def get_video_analyses():
+    video_analyses = []
+    for v in video_analyses_collection.find().sort("id", -1):
+        v.pop("_id", None)
+        video_analyses.append(v)
+    return video_analyses
+
+
+# ───────────── GET VIDEO ANALYSIS BY ID ─────────────
+@app.get("/video-analyses/{video_analysis_id}")
+async def get_video_analysis(video_analysis_id: int):
+    video_analysis = video_analyses_collection.find_one({"id": video_analysis_id})
+    if not video_analysis:
+        raise HTTPException(status_code=404, detail="Video analysis not found")
+    video_analysis.pop("_id", None)
+    return video_analysis
+
+
+# ───────────── DELETE VIDEO ANALYSIS ─────────────
+@app.delete("/video-analyses/{video_analysis_id}")
+async def delete_video_analysis(video_analysis_id: int):
+    result = video_analyses_collection.delete_one({"id": video_analysis_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Video analysis not found")
+    return {"message": "Deleted successfully"}
 
 
 # ───────────── RUN ─────────────
