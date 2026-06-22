@@ -2,4 +2,7 @@ streamlit
 python-dotenv
 langchain-google-genai
 langchain-core
-opencv-python-headless
+pymongo
+fastapi
+uvicorn
+python-multipart
